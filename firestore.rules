@@ -1,0 +1,96 @@
+rules_version = '2';
+
+// Security rules for the hello-world forum.
+//
+// Design notes:
+// - Reading is fully public (anyone can browse).
+// - Threads and replies (posts) can be created anonymously (4chan-style) OR by a
+//   signed-in user (authorUid must then equal their own uid).
+// - Voting requires sign-in; one vote doc per user per post enforced via the doc
+//   id `${postId}_${uid}`.
+// - Counter fields are updated from the client, so updates to those specific
+//   fields are intentionally allowed. This is a toy app with no serverless
+//   backend; the trade-off is that a determined user could fudge counters. The
+//   important integrity rule — one vote per user — IS enforced (doc id + value).
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    function changedKeys() { return request.resource.data.diff(resource.data).affectedKeys(); }
+
+    // --- boards: public read; created when seeding; only counters updatable ---
+    match /boards/{boardId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['name', 'slug', 'description', 'threadCount', 'postCount']);
+      allow update: if changedKeys().hasOnly(['threadCount', 'postCount']);
+      allow delete: if false;
+    }
+
+    // --- threads ---
+    match /threads/{threadId} {
+      allow read: if true;
+      allow create: if request.resource.data.title is string
+                    && request.resource.data.title.size() > 0
+                    && request.resource.data.title.size() <= 200
+                    && request.resource.data.boardId is string
+                    && request.resource.data.authorName is string
+                    && (request.resource.data.authorUid == null
+                        || request.resource.data.authorUid == request.auth.uid);
+      // only bump counters / lastBumpAt on reply
+      allow update: if changedKeys().hasOnly(['replyCount', 'lastBumpAt']);
+      allow delete: if false;
+    }
+
+    // --- posts (replies) ---
+    match /posts/{postId} {
+      allow read: if true;
+      allow create: if request.resource.data.threadId is string
+                    && request.resource.data.boardId is string
+                    && request.resource.data.text is string
+                    && request.resource.data.score == 0
+                    && request.resource.data.upvotes == 0
+                    && request.resource.data.downvotes == 0
+                    && (request.resource.data.authorUid == null
+                        || request.resource.data.authorUid == request.auth.uid);
+      // only signed-in users may change vote tallies (and nothing else)
+      allow update: if signedIn() && changedKeys().hasOnly(['score', 'upvotes', 'downvotes']);
+      allow delete: if false;
+    }
+
+    // --- users ---
+    match /users/{uid} {
+      allow read: if true;
+      allow create: if isOwner(uid);
+      // owner may update their own doc; anyone signed-in may only adjust the
+      // author's karma (votesReceived) when voting.
+      allow update: if isOwner(uid)
+                    || (signedIn() && changedKeys().hasOnly(['votesReceived']));
+      allow delete: if false;
+    }
+
+    // --- votes: one per (post, user); id must be `${postId}_${uid}` ---
+    match /votes/{voteId} {
+      allow read: if true;
+      allow create, update: if signedIn()
+                    && voteId == request.resource.data.postId + '_' + request.auth.uid
+                    && request.resource.data.uid == request.auth.uid
+                    && (request.resource.data.value == 1 || request.resource.data.value == -1);
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    // --- images: public read; create only, capped under Firestore's ~1MB doc limit ---
+    match /images/{imageId} {
+      allow read: if true;
+      allow create: if request.resource.data.dataUrl is string
+                    && request.resource.data.dataUrl.size() < 1000000;
+      allow update, delete: if false;
+    }
+
+    // --- meta counters (site-wide totals) ---
+    match /meta/{docId} {
+      allow read: if true;
+      allow write: if true; // toy counters; see design notes above
+    }
+  }
+}

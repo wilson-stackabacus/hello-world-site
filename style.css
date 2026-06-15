@@ -1,0 +1,13 @@
+/* The ONLY cosmetic styling in this app: keep Times New Roman, plus the rainbow
+   gradient text reused from the original hello-world page. Everything else uses
+   default browser styling on purpose (bare-bones). */
+body {
+  font-family: "Times New Roman", Times, serif;
+}
+.rainbow {
+  background: linear-gradient(to right, red, orange, yellow, green, blue, indigo, violet);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  display: inline-block;
+}
